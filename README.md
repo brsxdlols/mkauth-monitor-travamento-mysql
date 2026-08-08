@@ -1,27 +1,46 @@
 # Monitor de estabilidade MK-AUTH
 
-Monitor de recuperação automática da integração FreeRADIUS + MySQL/MariaDB, compatível com Debian 9, 10, 11 e 12. Não depende obrigatoriamente de `systemctl`: também funciona com `service` e `/etc/init.d`.
+Monitor de recuperação automática da integração FreeRADIUS + MySQL/MariaDB para Debian 9, 10, 11 e 12. Compatível com `systemctl`, `service` e `/etc/init.d`.
 
-## Instalação
+## Instalação automatizada
+
+Execute como `root` em um terminal interativo:
 
 ```bash
-chmod +x install.sh uninstall.sh monitor/check_backup_freeradius.sh
-sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/brsxdlols/mkauth-monitor-travamento-mysql/v1.1.0/install.sh | bash
 ```
 
-O instalador exige `root`, solicita o nome da VM e pergunta se o Telegram será usado. Se habilitado, solicita o token de forma visível e o Chat ID. Credenciais reais não fazem parte do repositório; ficam em `/etc/default/check_backup_freeradius`, modo `600`. O Telegram só é testado quando habilitado.
+O instalador lê as respostas diretamente de `/dev/tty`, portanto funciona com `curl | bash` sem consumir o restante do script. Também pode ser baixado e executado como arquivo.
+
+Ele solicita:
+
+- nome do MK-AUTH/VM;
+- ativação opcional do Telegram;
+- token visível e Chat ID somente quando o Telegram é habilitado.
+
+Não existe token ou Chat ID fixo no repositório. As credenciais ficam em `/etc/default/check_backup_freeradius`, com permissão `600`.
+
+## Funcionamento
+
+- lê somente novas linhas de `/var/log/freeradius/radius.log`, controladas por inode e offset;
+- usa `flock` contra execuções simultâneas;
+- testa MySQL/MariaDB com `SELECT 1` e timeout;
+- detecta automaticamente serviços `mysql`, `mariadb`, `mysqld`, `freeradius` ou `radiusd`;
+- para o FreeRADIUS, reinicia o banco, aguarda `SELECT 1`, inicia o FreeRADIUS e confirma processo e UDP 1812;
+- aplica cooldown de 180 segundos, exceto quando o `SELECT 1` falha de verdade;
+- envia alerta do Telegram e edita a mesma mensagem na recuperação, com fallback para nova mensagem.
 
 ## Arquivos criados
 
-- `/var/check_backup_freeradius.sh`: monitor instalado.
-- `/etc/default/check_backup_freeradius`: configuração protegida.
-- `/etc/cron.d/check_backup_freeradius`: execuções separadas por 30 segundos.
-- `/etc/logrotate.d/check_backup_freeradius`: rotação dos logs.
-- `/var/lib/check_backup_freeradius`: inode, offset, cooldown e incidente.
-- `/var/log/check_backup_freeradius.log`: eventos e recuperações.
-- `/var/log/check_backup_freeradius_cron.log`: saída do cron.
+- `/var/check_backup_freeradius.sh`
+- `/etc/default/check_backup_freeradius`
+- `/etc/cron.d/check_backup_freeradius`
+- `/etc/logrotate.d/check_backup_freeradius`
+- `/var/lib/check_backup_freeradius`
+- `/var/log/check_backup_freeradius.log`
+- `/var/log/check_backup_freeradius_cron.log`
 
-Arquivos anteriores recebem `.bak-AAAAMMDD-HHMMSS`. Entradas cron antigas ativas que chamam o monitor são comentadas e preservadas em backup.
+Arquivos anteriores recebem `.bak-AAAAMMDD-HHMMSS`. Todas as entradas cron antigas ativas que chamem `check_backup_freeradius.sh` são comentadas com backup, evitando que configurações antigas enviem alertas com outro nome de MK-AUTH.
 
 ## Teste controlado
 
@@ -31,24 +50,19 @@ Em uma janela:
 tail -F /var/log/check_backup_freeradius.log
 ```
 
-Em outra, durante uma janela de manutenção:
+Em outra, durante manutenção:
 
 ```bash
 service mysql stop
 ```
 
-Em até 30 segundos o monitor deve detectar a falha do `SELECT 1`, parar o FreeRADIUS, reiniciar o banco, aguardar sua resposta, iniciar o FreeRADIUS e confirmar processo e UDP 1812.
-
-Para acompanhar o cron:
-
-```bash
-tail -F /var/log/check_backup_freeradius_cron.log
-```
+O monitor deve recuperar o banco e o FreeRADIUS em até um ciclo de 30 segundos.
 
 ## Desinstalação
 
 ```bash
-sudo ./uninstall.sh
+chmod +x uninstall.sh
+./uninstall.sh
 ```
 
-O desinstalador pergunta se logs e backups devem ser preservados. Ele não remove arquivos do MK-AUTH.
+O desinstalador pergunta se logs e backups devem ser preservados e não remove arquivos do MK-AUTH.

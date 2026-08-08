@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -u
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -8,7 +9,11 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 printf 'Deseja preservar logs e backups? [S/n]: '
-read -r answer
+if [ -r /dev/tty ]; then
+    IFS= read -r answer < /dev/tty
+else
+    IFS= read -r answer
+fi
 preserve=sim
 case "$answer" in n|N|nao|NAO|não|NÃO) preserve=nao;; esac
 
@@ -28,4 +33,4 @@ if [ "$preserve" = nao ]; then
     rm -f /etc/logrotate.d/check_backup_freeradius.bak-*
 fi
 
-echo 'Monitor removido. Nenhum arquivo do MK-AUTH foi alterado ou removido.'
+echo 'Monitor removido. Nenhum arquivo do MK-AUTH foi removido.'

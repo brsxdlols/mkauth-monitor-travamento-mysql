@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 - 2026-08-08
+
+- Consolida todos os patches em um único `install.sh` autossuficiente.
+- Corrige execução interativa por `curl | bash` usando `/dev/tty`.
+- Corrige codificação UTF-8 e finais de linha Linux.
+- Remove Chat ID padrão e qualquer credencial fixa.
+- Sincroniza literalmente o monitor embutido com o arquivo separado.
+- Corrige validação UDP 1812 sem depender de uma coluna fixa do `ss`.
+- Detecta clientes `mysql` e `mariadb` e serviços alternativos.
+- Desativa crons antigos para impedir alertas com nomes/configurações anteriores.
+- Preserva leitura incremental, `flock`, `SELECT 1`, cooldown e Telegram editável.
+
 ## 1.0.0 - 2026-08-01
 
 - Leitura incremental de `radius.log` por inode e offset.
