@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.1 - 2026-08-08
+
+- Detecta e desativa o cron legado `mkauth_mysql_radius_guardian.sh`.
+- Encerra o processo Guardian v1.4 separado para impedir concorrência.
+- Preserva script e cron legados em backups datados para rollback.
+
 ## 1.5.0 - 2026-08-08
 
 - Consolida todos os patches em um único `install.sh` autossuficiente.

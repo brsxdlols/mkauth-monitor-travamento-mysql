@@ -3,7 +3,7 @@
 set -u
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-VERSION=1.5.0
+VERSION=1.5.1
 SCRIPT=/var/check_backup_freeradius.sh
 CONFIG=/etc/default/check_backup_freeradius
 CRON_FILE=/etc/cron.d/check_backup_freeradius
@@ -12,6 +12,8 @@ STATE_DIR=/var/lib/check_backup_freeradius
 MONITOR_LOG=/var/log/check_backup_freeradius.log
 CRON_LOG=/var/log/check_backup_freeradius_cron.log
 LOCK_FILE=/var/run/check_backup_freeradius.lock
+LEGACY_GUARDIAN=/usr/local/sbin/mkauth_mysql_radius_guardian.sh
+LEGACY_GUARDIAN_CRON=/etc/cron.d/mkauth_mysql_radius_guardian
 TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -88,7 +90,7 @@ echo "MK-AUTH/VM: $MKAUTH_NAME"
 echo "Telegram: $USAR_TELEGRAM"
 echo
 
-for item in "$SCRIPT" "$CONFIG" "$CRON_FILE" "$LOGROTATE"; do
+for item in "$SCRIPT" "$CONFIG" "$CRON_FILE" "$LOGROTATE" "$LEGACY_GUARDIAN" "$LEGACY_GUARDIAN_CRON"; do
     if [ -e "$item" ]; then
         cp -a "$item" "${item}.bak-${TIMESTAMP}"
         echo "Backup criado: ${item}.bak-${TIMESTAMP}"
@@ -106,14 +108,17 @@ while IFS= read -r file; do
     [ -n "$file" ] || continue
     [ -f "$file" ] || continue
     [ "$file" = "$CRON_FILE" ] && continue
-    if grep -Eq '^[[:space:]]*[^#].*check_backup_freeradius\.sh' "$file" 2>/dev/null; then
+    if grep -Eq '^[[:space:]]*[^#].*(check_backup_freeradius|mkauth_mysql_radius_guardian)\.sh' "$file" 2>/dev/null; then
         cp -a "$file" "${file}.bak-${TIMESTAMP}"
-        sed -i "/^[[:space:]]*[^#].*check_backup_freeradius\.sh/s|^|# DESATIVADO ${TIMESTAMP}: |" "$file"
+        sed -i -E "/^[[:space:]]*[^#].*(check_backup_freeradius|mkauth_mysql_radius_guardian)\.sh/s|^|# DESATIVADO ${TIMESTAMP}: |" "$file"
         echo "Cron antigo desativado: $file"
     fi
 done <<EOF
 $CRON_FILES
 EOF
+
+# Encerra somente o Guardian v1.4 legado; o arquivo é preservado em backup.
+pkill -TERM -f '/usr/local/sbin/mkauth_mysql_radius_guardian\.sh' 2>/dev/null || true
 
 mkdir -p "$STATE_DIR"
 touch "$MONITOR_LOG" "$CRON_LOG"

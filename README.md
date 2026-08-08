@@ -7,7 +7,7 @@ Monitor de recuperação automática da integração FreeRADIUS + MySQL/MariaDB 
 Execute como `root` em um terminal interativo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/brsxdlols/mkauth-monitor-travamento-mysql/v1.5.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/brsxdlols/mkauth-monitor-travamento-mysql/v1.5.1/install.sh | bash
 ```
 
 O instalador lê as respostas diretamente de `/dev/tty`, portanto funciona com `curl | bash` sem consumir o restante do script. Também pode ser baixado e executado como arquivo.
@@ -44,6 +44,8 @@ Não existe token ou Chat ID fixo no repositório. As credenciais ficam em `/etc
 - `/var/log/check_backup_freeradius_cron.log`
 
 Arquivos anteriores recebem `.bak-AAAAMMDD-HHMMSS`. Todas as entradas cron antigas ativas que chamem `check_backup_freeradius.sh` são comentadas com backup, evitando que configurações antigas enviem alertas com outro nome de MK-AUTH.
+
+Se o Guardian v1.4 separado estiver instalado, seu script e cron também recebem backup, as entradas ativas são comentadas e o processo legado é encerrado. Os arquivos são preservados para rollback, mas não continuam concorrendo com o monitor consolidado.
 
 ## Teste controlado
 
