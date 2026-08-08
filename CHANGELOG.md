@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 - 2026-08-08
+## 1.5.0 - 2026-08-08
 
 - Consolida todos os patches em um único `install.sh` autossuficiente.
 - Corrige execução interativa por `curl | bash` usando `/dev/tty`.
@@ -11,6 +11,10 @@
 - Detecta clientes `mysql` e `mariadb` e serviços alternativos.
 - Desativa crons antigos para impedir alertas com nomes/configurações anteriores.
 - Preserva leitura incremental, `flock`, `SELECT 1`, cooldown e Telegram editável.
+- Incorpora o Guardian v1.4 ao monitor principal sem criar cron concorrente.
+- Aguarda 90 segundos por recuperação automática antes da intervenção.
+- Adiciona encerramento TERM/KILL controlado e limpeza segura de socket/PID.
+- Aguarda até 150 segundos pelo retorno do banco e reinicia o pool SQL do FreeRADIUS.
 
 ## 1.0.0 - 2026-08-01
 

@@ -3,7 +3,7 @@
 set -u
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-VERSION=1.1.0
+VERSION=1.5.0
 SCRIPT=/var/check_backup_freeradius.sh
 CONFIG=/etc/default/check_backup_freeradius
 CRON_FILE=/etc/cron.d/check_backup_freeradius
@@ -68,7 +68,7 @@ case "$RESPOSTA_TELEGRAM" in
         ;;
 esac
 
-for command_name in bash flock timeout pgrep stat tail grep sed find mv curl; do
+for command_name in bash flock timeout pgrep pkill stat tail grep sed find mv curl; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "ERRO: comando obrigatório ausente: $command_name"
         exit 1
@@ -150,12 +150,15 @@ COOLDOWN_FILE="$STATE_DIR/last_successful_recovery"
 MESSAGE_ID_FILE="$STATE_DIR/telegram_message_id"
 INCIDENT_START_FILE="$STATE_DIR/incident_start"
 INCIDENT_REASON_FILE="$STATE_DIR/incident_reason"
+FAIL_START_FILE="$STATE_DIR/mysql_fail_start"
 
 MKAUTH_NAME="$(hostname 2>/dev/null || printf mk-auth)"
 USAR_TELEGRAM=nao
 TELEGRAM_BOT=
 TELEGRAM_CHAT_ID=
 COOLDOWN_SECONDS=180
+WAIT_AUTO_RECOVERY=90
+MYSQL_START_TIMEOUT=150
 
 if [ -r "$CONFIG" ]; then
     # shellcheck disable=SC1090
@@ -259,8 +262,8 @@ radius_ok() {
 }
 
 wait_mysql() {
-    local elapsed=0
-    while [ "$elapsed" -lt 60 ]; do
+    local limit="${1:-60}" elapsed=0
+    while [ "$elapsed" -lt "$limit" ]; do
         mysql_ok && return 0
         sleep 3
         elapsed=$((elapsed + 3))
@@ -400,7 +403,19 @@ cooldown_active() {
     [ "$difference" -ge 0 ] && [ "$difference" -lt "$COOLDOWN_SECONDS" ]
 }
 
-recover() {
+mark_recovery() {
+    date +%s > "$COOLDOWN_FILE"
+    chmod 600 "$COOLDOWN_FILE"
+}
+
+restart_radius() {
+    log "Reiniciando $RADIUS_SERVICE."
+    service_action "$RADIUS_SERVICE" restart >> "$MONITOR_LOG" 2>&1 ||
+        service_action "$RADIUS_SERVICE" start >> "$MONITOR_LOG" 2>&1 || true
+    wait_radius
+}
+
+recover_standard() {
     local reason="$1"
     log '======================================================'
     log "Incidente detectado em $MKAUTH_NAME: $reason"
@@ -439,11 +454,68 @@ recover() {
         return 1
     fi
 
-    date +%s > "$COOLDOWN_FILE"
-    chmod 600 "$COOLDOWN_FILE"
+    mark_recovery
     send_recovered "$reason" || true
     clear_incident_state
     log "Recuperação concluída; cooldown de $COOLDOWN_SECONDS segundos."
+    log '======================================================'
+    return 0
+}
+
+recover_controlled() {
+    local reason="$1" mysql_processes
+    log '======================================================'
+    log "Falha persistente em $MKAUTH_NAME: $reason"
+    log "Iniciando recuperação controlada após ${WAIT_AUTO_RECOVERY}s."
+
+    service_action "$RADIUS_SERVICE" stop >> "$MONITOR_LOG" 2>&1 || true
+    service_action "$MYSQL_SERVICE" stop >> "$MONITOR_LOG" 2>&1 || true
+    sleep 8
+
+    pkill -TERM mysqld 2>/dev/null || true
+    pkill -TERM mariadbd 2>/dev/null || true
+    sleep 10
+
+    if pgrep -x mysqld >/dev/null 2>&1 || pgrep -x mariadbd >/dev/null 2>&1; then
+        mysql_processes="$(pgrep -af 'mysqld|mariadbd' 2>/dev/null | tr '\n' ' ')"
+        log "Processo do banco permaneceu preso: $mysql_processes"
+        log 'Aplicando KILL somente após TERM e espera controlada.'
+        pkill -KILL mysqld 2>/dev/null || true
+        pkill -KILL mariadbd 2>/dev/null || true
+        sleep 4
+    fi
+
+    if ! pgrep -x mysqld >/dev/null 2>&1 && ! pgrep -x mariadbd >/dev/null 2>&1; then
+        rm -f /var/run/mysqld/mysqld.sock /var/run/mysqld/mysqld.pid
+        rm -f /run/mysqld/mysqld.sock /run/mysqld/mysqld.pid
+        mkdir -p /var/run/mysqld
+        if id mysql >/dev/null 2>&1; then
+            chown mysql:mysql /var/run/mysqld
+        fi
+        chmod 755 /var/run/mysqld
+    fi
+
+    service_action "$MYSQL_SERVICE" start >> "$MONITOR_LOG" 2>&1 || true
+    if ! wait_mysql "$MYSQL_START_TIMEOUT"; then
+        log "CRÍTICO: banco não respondeu em ${MYSQL_START_TIMEOUT}s."
+        telegram_send_plain "❌ MYSQL NÃO RECUPERADO \"$MKAUTH_NAME\"\n\nA recuperação controlada não restabeleceu o SELECT 1." || true
+        return 1
+    fi
+
+    service_action "$RADIUS_SERVICE" start >> "$MONITOR_LOG" 2>&1 || true
+    if ! wait_radius; then
+        service_action "$RADIUS_SERVICE" restart >> "$MONITOR_LOG" 2>&1 || true
+        if ! wait_radius; then
+            log 'CRÍTICO: FreeRADIUS/UDP 1812 não recuperou.'
+            return 1
+        fi
+    fi
+
+    rm -f "$FAIL_START_FILE"
+    mark_recovery
+    send_recovered "$reason" || true
+    clear_incident_state
+    log 'Recuperação controlada concluída.'
     log '======================================================'
     return 0
 }
@@ -493,22 +565,78 @@ read_new_log() {
 FOUND_LINE=
 read_new_log
 
-# Falha real no SELECT 1 sempre ignora o cooldown.
-if ! mysql_ok; then
-    recover "${FOUND_LINE:-MySQL não respondeu ao comando SELECT 1.}"
-    exit $?
-fi
+NOW="$(date +%s)"
 
-if [ -n "$FOUND_LINE" ]; then
-    if cooldown_active; then
-        log "Evento ignorado durante cooldown porque SELECT 1 está normal: $FOUND_LINE"
-        exit 0
+if mysql_ok; then
+    if [ -r "$FAIL_START_FILE" ]; then
+        read -r FAIL_START < "$FAIL_START_FILE"
+        case "$FAIL_START" in ''|*[!0-9]*) FAIL_START="$NOW";; esac
+        REASON="$(cat "$INCIDENT_REASON_FILE" 2>/dev/null || printf 'MySQL não respondeu ao comando SELECT 1.')"
+        log "Banco voltou automaticamente após $((NOW - FAIL_START))s; reiniciando FreeRADIUS para limpar o pool SQL."
+        if restart_radius; then
+            rm -f "$FAIL_START_FILE"
+            mark_recovery
+            send_recovered "$REASON" || true
+            clear_incident_state
+            exit 0
+        fi
+        log 'CRÍTICO: banco voltou, mas FreeRADIUS/UDP 1812 não recuperou.'
+        exit 1
     fi
-    recover "$FOUND_LINE"
-    exit $?
+
+    if [ -n "$FOUND_LINE" ]; then
+        if cooldown_active; then
+            log "Evento ignorado durante cooldown porque SELECT 1 está normal: $FOUND_LINE"
+            exit 0
+        fi
+        recover_standard "$FOUND_LINE"
+        exit $?
+    fi
+
+    if ! radius_ok; then
+        if cooldown_active; then
+            log 'MySQL normal, mas FreeRADIUS/UDP 1812 inativo durante cooldown.'
+            exit 0
+        fi
+        clear_incident_state
+        send_alert 'MySQL responde normalmente, porém o FreeRADIUS ou a porta UDP 1812 estão inativos.' || true
+        if restart_radius; then
+            mark_recovery
+            send_recovered 'FreeRADIUS ou porta UDP 1812 estavam inativos.' || true
+            clear_incident_state
+            exit 0
+        fi
+        exit 1
+    fi
+
+    exit 0
 fi
 
-exit 0
+REASON="${FOUND_LINE:-MySQL não respondeu ao comando SELECT 1.}"
+
+if [ ! -r "$FAIL_START_FILE" ]; then
+    printf '%s\n' "$NOW" > "$FAIL_START_FILE"
+    chmod 600 "$FAIL_START_FILE"
+    clear_incident_state
+    send_alert "$REASON" || true
+    log "Banco indisponível; aguardando recuperação automática por ${WAIT_AUTO_RECOVERY}s."
+    exit 0
+fi
+
+read -r FAIL_START < "$FAIL_START_FILE"
+case "$FAIL_START" in
+    ''|*[!0-9]*) FAIL_START="$NOW"; printf '%s\n' "$NOW" > "$FAIL_START_FILE";;
+esac
+FAIL_DURATION=$((NOW - FAIL_START))
+
+if [ "$FAIL_DURATION" -lt "$WAIT_AUTO_RECOVERY" ]; then
+    log "Banco indisponível há ${FAIL_DURATION}s; aguardando recuperação automática."
+    exit 0
+fi
+
+# Falha real no SELECT 1 ignora o cooldown.
+recover_controlled "$REASON"
+exit $?
 MONITOR_EOF
 
 chown root:root "$SCRIPT"
@@ -546,6 +674,7 @@ chmod 644 "$LOGROTATE"
 
 rm -f "$STATE_DIR/radius.offset" "$STATE_DIR/radius.inode"
 rm -f "$STATE_DIR/last_successful_recovery"
+rm -f "$STATE_DIR/mysql_fail_start"
 rm -f "$STATE_DIR/telegram_message_id" "$STATE_DIR/incident_start" "$STATE_DIR/incident_reason"
 rm -f "$LOCK_FILE"
 

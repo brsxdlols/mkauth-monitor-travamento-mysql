@@ -7,7 +7,7 @@ Monitor de recuperação automática da integração FreeRADIUS + MySQL/MariaDB 
 Execute como `root` em um terminal interativo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/brsxdlols/mkauth-monitor-travamento-mysql/v1.1.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/brsxdlols/mkauth-monitor-travamento-mysql/v1.5.0/install.sh | bash
 ```
 
 O instalador lê as respostas diretamente de `/dev/tty`, portanto funciona com `curl | bash` sem consumir o restante do script. Também pode ser baixado e executado como arquivo.
@@ -28,6 +28,9 @@ Não existe token ou Chat ID fixo no repositório. As credenciais ficam em `/etc
 - detecta automaticamente serviços `mysql`, `mariadb`, `mysqld`, `freeradius` ou `radiusd`;
 - para o FreeRADIUS, reinicia o banco, aguarda `SELECT 1`, inicia o FreeRADIUS e confirma processo e UDP 1812;
 - aplica cooldown de 180 segundos, exceto quando o `SELECT 1` falha de verdade;
+- aguarda 90 segundos para recuperação automática do banco antes da ação controlada;
+- após a espera, encerra processos presos com TERM, aguarda e usa KILL somente se necessário;
+- remove socket/PID antigos somente depois de confirmar que não existe processo do banco;
 - envia alerta do Telegram e edita a mesma mensagem na recuperação, com fallback para nova mensagem.
 
 ## Arquivos criados
@@ -56,7 +59,7 @@ Em outra, durante manutenção:
 service mysql stop
 ```
 
-O monitor deve recuperar o banco e o FreeRADIUS em até um ciclo de 30 segundos.
+O primeiro alerta ocorre em até 30 segundos. O monitor aguarda até 90 segundos por recuperação automática antes de executar a recuperação controlada.
 
 ## Desinstalação
 
